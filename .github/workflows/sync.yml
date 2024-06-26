@@ -42,8 +42,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.TXTRULE2SINGBOX }}
       run: |
-        git config --global user.email "action@github.com"
-        git config --global user.name "GitHub Action"
+        git config --global user.email "ajskyao@gmail.com"
+        git config --global user.name "ajsky"
         git add ./rule/*.json
         git add ./rule/*.srs
 
