@@ -6,9 +6,8 @@ import requests
 import yaml
 import ipaddress
 import logging
-from urllib.error import HTTPError
 
-# Configure logging
+# 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def read_yaml_from_url(url):
@@ -23,65 +22,119 @@ def read_yaml_from_url(url):
 
 def read_list_from_url(url):
     try:
-        response = requests.get(url)
-        response.raise_for_status()
-        content = response.text
-        return content
-    except requests.exceptions.RequestException as e:
-        logging.error(f"Error fetching content from {url}: {e}")
+        df = pd.read_csv(url, header=None, names=['pattern', 'address', 'other'], on_bad_lines='warn')
+        return df
+    except Exception as e:
+        logging.error(f"Error reading list from {url}: {e}")
         raise
 
-def parse_and_convert_to_dataframe(content, file_type):
-    lines = content.strip().split('\n')
-    data = []
-    
-    if file_type == 'bilibili':
-        for line in lines:
-            if line.startswith('host'):
-                parts = line.split(',')
-                if len(parts) >= 2:
-                    data.append({'type': 'host', 'value': parts[1]})
-    elif file_type == 'wechat':
-        for line in lines:
-            if not line.startswith('#') and line.strip():
-                data.append({'rule': line.strip()})
-    elif file_type == 'microsoft':
-        for line in lines:
-            if line.startswith('HOST'):
-                parts = line.split(',')
-                if len(parts) >= 3:
-                    data.append({'type': parts[0], 'host': parts[1], 'group': parts[2]})
-    else:
-        logging.warning(f"Unknown file type: {file_type}")
-    
-    return pd.DataFrame(data)
+def is_ipv4_or_ipv6(address):
+    try:
+        ipaddress.IPv4Network(address)
+        return 'ipv4'
+    except ValueError:
+        try:
+            ipaddress.IPv6Network(address)
+            return 'ipv6'
+        except ValueError:
+            return None
+
+def parse_and_convert_to_dataframe(link):
+    logging.info(f"Parsing link: {link}")
+    try:
+        if link.endswith('.yaml') or link.endswith('.txt'):
+            yaml_data = read_yaml_from_url(link)
+            rows = []
+            if not isinstance(yaml_data, str):
+                items = yaml_data.get('payload', [])
+            else:
+                lines = yaml_data.splitlines()
+                line_content = lines[0]
+                items = line_content.split()
+            for item in items:
+                address = item.strip("'")
+                if ',' not in item:
+                    if is_ipv4_or_ipv6(item):
+                        pattern = 'IP-CIDR'
+                    else:
+                        if address.startswith('+') or address.startswith('.'):
+                            pattern = 'DOMAIN-SUFFIX'
+                            address = address[1:]
+                            if address.startswith('.'):
+                                address = address[1:]
+                        else:
+                            pattern = 'DOMAIN'
+                else:
+                    pattern, address = item.split(',', 1)  
+                rows.append({'pattern': pattern.strip(), 'address': address.strip(), 'other': None})
+            df = pd.DataFrame(rows, columns=['pattern', 'address', 'other'])
+        else:
+            df = read_list_from_url(link)
+        return df
+    except Exception as e:
+        logging.error(f"Error parsing {link}: {e}")
+        raise
+
+# ... [其他函数保持不变] ...
 
 def parse_list_file(link, output_directory):
     logging.info(f"Processing link: {link}")
     try:
-        content = read_list_from_url(link)
-        
-        if 'Bilibili.list' in link:
-            file_type = 'bilibili'
-        elif 'WeChat.list' in link:
-            file_type = 'wechat'
-        elif 'Microsoft.list' in link:
-            file_type = 'microsoft'
-        else:
-            file_type = 'unknown'
-        
-        df = parse_and_convert_to_dataframe(content, file_type)
+        df = parse_and_convert_to_dataframe(link)
 
-        file_name = os.path.join(output_directory, os.path.basename(link))
-        df.to_csv(file_name, index=False)
+        # 删除pattern中包含#号的行
+        df = df[~df['pattern'].str.contains('#')].reset_index(drop=True)
 
+        # 映射字典
+        map_dict = {'DOMAIN-SUFFIX': 'domain_suffix', 'HOST-SUFFIX': 'domain_suffix', 'DOMAIN': 'domain', 'HOST': 'domain', 'host': 'domain',
+                    'DOMAIN-KEYWORD':'domain_keyword', 'HOST-KEYWORD': 'domain_keyword', 'host-keyword': 'domain_keyword', 'IP-CIDR': 'ip_cidr',
+                    'ip-cidr': 'ip_cidr', 'IP-CIDR6': 'ip_cidr', 
+                    'IP6-CIDR': 'ip_cidr','SRC-IP-CIDR': 'source_ip_cidr', 'GEOIP': 'geoip', 'DST-PORT': 'port',
+                    'SRC-PORT': 'source_port', "URL-REGEX": "domain_regex"}
+
+        # 删除不在字典中的pattern
+        df = df[df['pattern'].isin(map_dict.keys())].reset_index(drop=True)
+
+        # 删除重复行
+        df = df.drop_duplicates().reset_index(drop=True)
+        # 替换pattern为字典中的值
+        df['pattern'] = df['pattern'].replace(map_dict)
+
+        # 创建自定义文件夹
+        os.makedirs(output_directory, exist_ok=True)
+
+        result_rules = {"version": 1, "rules": []}
+        domain_entries = []
+
+        for pattern, addresses in df.groupby('pattern')['address'].apply(list).to_dict().items():
+            if pattern == 'domain_suffix':
+                rule_entry = {pattern: ['.' + address.strip() for address in addresses]}
+                result_rules["rules"].append(rule_entry)
+                domain_entries.extend([address.strip() for address in addresses])
+            elif pattern == 'domain':
+                domain_entries.extend([address.strip() for address in addresses])
+            else:
+                rule_entry = {pattern: [address.strip() for address in addresses]}
+                result_rules["rules"].append(rule_entry)
+        # 删除 'domain_entries' 中的重复值
+        domain_entries = list(set(domain_entries))
+        if domain_entries:
+            result_rules["rules"].insert(0, {'domain': domain_entries})
+
+        # 使用 output_directory 拼接完整路径
+        file_name = os.path.join(output_directory, f"{os.path.basename(link).split('.')[0]}.json")
+        with open(file_name, 'w', encoding='utf-8') as output_file:
+            json.dump(sort_dict(result_rules), output_file, ensure_ascii=False, indent=2)
+
+        srs_path = file_name.replace(".json", ".srs")
+        os.system(f"sing-box rule-set compile --output {srs_path} {file_name}")
         logging.info(f"Successfully processed {link}")
         return file_name
     except Exception as e:
         logging.error(f"Error processing {link}: {e}")
         raise
 
-# Main execution
+# 主执行
 if __name__ == "__main__":
     try:
         with open("../links.txt", 'r') as links_file:
