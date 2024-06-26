@@ -23,28 +23,57 @@ def read_yaml_from_url(url):
 
 def read_list_from_url(url):
     try:
-        df = pd.read_csv(url, header=None, names=['pattern', 'address', 'other'], on_bad_lines='warn')
-        return df
-    except HTTPError as e:
-        logging.error(f"HTTP error when reading CSV from {url}: {e.code}, {e.reason}")
-        raise
-    except pd.errors.ParserError as e:
-        logging.error(f"Parsing error when reading CSV from {url}: {e}")
-        raise
-    except Exception as e:
-        logging.error(f"Unexpected error when reading CSV from {url}: {e}")
+        response = requests.get(url)
+        response.raise_for_status()
+        content = response.text
+        return content
+    except requests.exceptions.RequestException as e:
+        logging.error(f"Error fetching content from {url}: {e}")
         raise
 
-# ... [rest of the functions remain unchanged] ...
+def parse_and_convert_to_dataframe(content, file_type):
+    lines = content.strip().split('\n')
+    data = []
+    
+    if file_type == 'bilibili':
+        for line in lines:
+            if line.startswith('host'):
+                parts = line.split(',')
+                if len(parts) >= 2:
+                    data.append({'type': 'host', 'value': parts[1]})
+    elif file_type == 'wechat':
+        for line in lines:
+            if not line.startswith('#') and line.strip():
+                data.append({'rule': line.strip()})
+    elif file_type == 'microsoft':
+        for line in lines:
+            if line.startswith('HOST'):
+                parts = line.split(',')
+                if len(parts) >= 3:
+                    data.append({'type': parts[0], 'host': parts[1], 'group': parts[2]})
+    else:
+        logging.warning(f"Unknown file type: {file_type}")
+    
+    return pd.DataFrame(data)
 
 def parse_list_file(link, output_directory):
     logging.info(f"Processing link: {link}")
     try:
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            results = list(executor.map(parse_and_convert_to_dataframe, [link]))
-        df = pd.concat(results, ignore_index=True)
+        content = read_list_from_url(link)
+        
+        if 'Bilibili.list' in link:
+            file_type = 'bilibili'
+        elif 'WeChat.list' in link:
+            file_type = 'wechat'
+        elif 'Microsoft.list' in link:
+            file_type = 'microsoft'
+        else:
+            file_type = 'unknown'
+        
+        df = parse_and_convert_to_dataframe(content, file_type)
 
-        # ... [rest of the function remains unchanged] ...
+        file_name = os.path.join(output_directory, os.path.basename(link))
+        df.to_csv(file_name, index=False)
 
         logging.info(f"Successfully processed {link}")
         return file_name
