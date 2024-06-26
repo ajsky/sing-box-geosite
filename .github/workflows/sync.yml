@@ -12,24 +12,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
+    - name: Checkout repository
+      uses: actions/checkout@v2
     
-    - name: "Setup sing-box"
+    - name: Setup sing-box
       env:
         SING_BOX_DEB_URL: "https://github.com/SagerNet/sing-box/releases/download/v1.8.0-rc.7/sing-box_1.8.0-rc.7_linux_amd64.deb"
       run: |
-        set -Eeuo pipefail
+        echo "Downloading sing-box..."
         wget -O sing-box.deb "$SING_BOX_DEB_URL"
+        echo "Installing sing-box..."
         sudo dpkg -i sing-box.deb
 
-    - name: Set up Python3
+    - name: Set up Python 3
       uses: actions/setup-python@v2
       with:
         python-version: '3.x'
 
     - name: Install dependencies
       run: |
+        echo "Upgrading pip..."
         python -m pip install --upgrade pip
+        echo "Installing dependencies..."
         pip install pandas requests pyyaml
 
     - name: Run script
@@ -38,20 +42,25 @@ jobs:
         echo "Running main.py..."
         python ../main.py
 
-    - name: Commit and push config.json
+    - name: Commit and push changes
       env:
         GITHUB_TOKEN: ${{ secrets.TXTRULE2SINGBOX }}
       run: |
+        echo "Configuring Git..."
         git config --global user.email "ajskyao@gmail.com"
         git config --global user.name "ajsky"
+        echo "Adding changes..."
         git add ./rule/*.json
         git add ./rule/*.srs
 
         # 检查是否有文件被修改
+        echo "Checking for changes to commit..."
         if git diff --staged --quiet; then
           echo "No changes to commit"
           exit 0
         else
+          echo "Committing changes..."
           git commit -m "Update rules"
+          echo "Pushing changes..."
           git push
         fi
