@@ -13,24 +13,29 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    
     - name: "Setup sing-box"
       env:
         SING_BOX_DEB_URL: "https://github.com/SagerNet/sing-box/releases/download/v1.8.0-rc.7/sing-box_1.8.0-rc.7_linux_amd64.deb"
       run: |
-          set -Eeuo pipefail
-          wget -O sing-box.deb $SING_BOX_DEB_URL
-          sudo dpkg -i sing-box.deb
+        set -Eeuo pipefail
+        wget -O sing-box.deb "$SING_BOX_DEB_URL"
+        sudo dpkg -i sing-box.deb
+
     - name: Set up Python3
       uses: actions/setup-python@v2
       with:
-        python-version: 3.x
+        python-version: '3.x'
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install pandas requests pyyaml
+
     - name: Run script
-      run: python ../main.py
       working-directory: ./rule/
+      run: python ../main.py
+
     - name: Commit and push config.json
       env:
         GITHUB_TOKEN: ${{ secrets.TXTRULE2SINGBOX }}
